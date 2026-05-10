@@ -1,5 +1,5 @@
-import { getLiveAlertFeed } from "@/lib/goldrush";
+import { getRealtimeAlerts } from "@/lib/streaming/realtime";
 
 export async function GET() {
-  return Response.json(await getLiveAlertFeed());
+  return Response.json(await getRealtimeAlerts());
 }

@@ -1,4 +1,7 @@
+"use client";
+
 import { ArrowRightLeft, BadgeAlert, CircleAlert, RadioTower, TrendingUp } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { RiskBadge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { compactAddress, formatRelativeTime, formatUsd } from "@/lib/utils";
@@ -11,6 +14,7 @@ const icon: Record<AlertKind, typeof RadioTower> = {
   large_transfer: RadioTower,
   dex_activity: ArrowRightLeft,
   suspicious_movement: BadgeAlert,
+  agent_detection: BadgeAlert,
 };
 
 function severityAccent(severity: SentinelAlert["severity"]) {
@@ -34,7 +38,62 @@ function absoluteTime(timestamp: string) {
 }
 
 export function LiveAlertFeed({ alerts, animated = false }: { alerts: SentinelAlert[]; animated?: boolean }) {
-  const rows = alerts;
+  const [streamedAlerts, setStreamedAlerts] = useState<SentinelAlert[]>(alerts);
+  const [streamStatus, setStreamStatus] = useState<"connecting" | "live" | "reconnecting" | "offline">(alerts.length ? "live" : "connecting");
+  const [updatedAt, setUpdatedAt] = useState<string | null>(alerts[0]?.timestamp ?? null);
+
+  useEffect(() => {
+    if (typeof EventSource === "undefined") return;
+
+    const source = new EventSource("/api/stream");
+
+    source.addEventListener("status", (event) => {
+      try {
+        const payload = JSON.parse(event.data) as { status?: "live" | "idle"; updatedAt?: string };
+        setStreamStatus(payload.status === "live" ? "live" : "connecting");
+        setUpdatedAt(payload.updatedAt ?? new Date().toISOString());
+      } catch {
+        setStreamStatus("reconnecting");
+      }
+    });
+
+    source.addEventListener("alert", (event) => {
+      try {
+        const payload = JSON.parse(event.data) as { alert?: SentinelAlert; updatedAt?: string };
+        const alert = payload.alert;
+        if (!alert) return;
+        setUpdatedAt(payload.updatedAt ?? alert.timestamp);
+        setStreamStatus("live");
+        setStreamedAlerts((current) => {
+          const next = [alert, ...current];
+          return Array.from(new Map(next.map((alert) => [`${alert.id}:${alert.wallet}:${alert.timestamp}:${alert.kind}`, alert])).values()).slice(0, 16);
+        });
+      } catch {
+        setStreamStatus("reconnecting");
+      }
+    });
+
+    source.onerror = () => {
+      setStreamStatus("reconnecting");
+      window.setTimeout(() => {
+        if (source.readyState === EventSource.CLOSED) setStreamStatus("offline");
+      }, 8000);
+    };
+
+    return () => source.close();
+  }, [alerts.length]);
+
+  const rows = streamedAlerts;
+  const statusLabel = {
+    connecting: "Connecting...",
+    live: "Live",
+    reconnecting: "Reconnecting...",
+    offline: "Offline (fallback mode)",
+  }[streamStatus];
+  const statusClass = streamStatus === "live"
+    ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-100"
+    : "border-white/10 bg-white/[.06] text-slate-300";
+  const updatedLabel = useMemo(() => updatedAt ? formatRelativeTime(updatedAt) : null, [updatedAt]);
 
   return (
     <Card className="overflow-hidden border-cyan-300/15 bg-slate-950/80 shadow-[0_24px_100px_rgba(8,47,73,.3)]">
@@ -43,13 +102,14 @@ export function LiveAlertFeed({ alerts, animated = false }: { alerts: SentinelAl
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-white">Live Alert Tape</p>
           <p className="mt-1 text-sm leading-6 text-slate-400">GoldRush transaction alerts.</p>
         </div>
-        {alerts.length > 0 && (
-          <span className="w-fit rounded-md border border-emerald-300/20 bg-emerald-300/10 px-2 py-1 text-xs font-medium text-emerald-100 shadow-[0_0_28px_rgba(16,185,129,.12)]">
-            LIVE
+        <div className="flex flex-wrap items-center gap-2">
+          {updatedLabel && <span className="text-xs text-slate-500">Updated {updatedLabel}</span>}
+          <span className={`w-fit rounded-md border px-2 py-1 text-xs font-medium shadow-[0_0_28px_rgba(16,185,129,.08)] ${statusClass}`}>
+            {statusLabel}
           </span>
-        )}
+        </div>
       </div>
-      {!alerts.length && (
+      {!rows.length && (
         <div className="p-4 sm:p-5">
           <div className="rounded-md border border-white/10 bg-white/[.035] p-5 text-sm leading-6 text-slate-300">
             No alerts available.

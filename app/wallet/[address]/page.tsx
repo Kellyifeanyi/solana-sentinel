@@ -13,15 +13,16 @@ import { Card } from "@/components/ui/card";
 import { WalletSearch } from "@/components/home/wallet-search";
 import { MobileNav } from "@/components/mobile-nav";
 import { ConnectWalletButton } from "@/components/wallet/connect-wallet-button";
-import { getLiveAlerts, getWalletReport } from "@/lib/goldrush";
+import { getWalletReport } from "@/lib/goldrush";
 import { buildWalletStory } from "@/lib/insights/wallet-story";
 import { deriveActionOpportunities } from "@/lib/signals/action-engine";
+import { getRealtimeAlerts } from "@/lib/streaming/realtime";
 import { compactAddress, formatRelativeTime, formatUsd } from "@/lib/utils";
 
 export default async function WalletPage({ params }: { params: Promise<{ address: string }> }) {
   const { address } = await params;
   const report = await getWalletReport(decodeURIComponent(address));
-  const alerts = await getLiveAlerts();
+  const alerts = (await getRealtimeAlerts()).alerts;
   const totalValue = report.balances.reduce((sum, balance) => sum + balance.valueUsd, 0);
   const highRiskCount = report.transactions.filter((tx) => tx.risk === "high" || tx.risk === "critical").length;
   const walletStory = buildWalletStory(report);

@@ -3,6 +3,7 @@ import { configuredWatchlistAddresses } from "@/lib/watchlist/auto-watchlist";
 import type {
   AlertKind,
   AlertFeed,
+  AgentDetection,
   RiskLevel,
   RiskSignals,
   SentinelAlert,
@@ -30,6 +31,7 @@ type GoldRushEnvelope<T> = {
 type GoldRushBalanceItem = {
   contract_ticker_symbol?: string | null;
   contract_name?: string | null;
+  contract_address?: string | null;
   contract_decimals?: number | null;
   balance?: string | null;
   quote?: number | null;
@@ -37,6 +39,8 @@ type GoldRushBalanceItem = {
   quote_rate?: number | null;
   quote_rate_24h?: number | null;
   logo_url?: string | null;
+  is_spam?: boolean | null;
+  last_transferred_at?: string | null;
 };
 
 type GoldRushTransactionItem = {
@@ -55,6 +59,19 @@ type GoldRushTransactionItem = {
     sender_address?: string | null;
     decoded?: { name?: string | null } | null;
   }> | null;
+};
+
+export type GoldRushEventEvidence = {
+  txHash: string;
+  timestamp: string;
+  fromAddress?: string;
+  toAddress?: string;
+  amountUsd: number;
+  successful?: boolean | null;
+  decodedNames: string[];
+  senderSymbols: string[];
+  senderNames: string[];
+  senderAddresses: string[];
 };
 
 type CacheEntry<T> = {
@@ -87,6 +104,11 @@ function getCached<T>(key: string, maxAgeMs: number): T | null {
   return entry.value;
 }
 
+function getAnyCached<T>(key: string): T | null {
+  const entry = responseCache.get(key) as CacheEntry<T> | undefined;
+  return entry?.value ?? null;
+}
+
 function setCached<T>(key: string, value: T) {
   responseCache.set(key, { value, timestamp: Date.now() });
 }
@@ -97,14 +119,17 @@ function retryDelay(response: Response) {
   return Number.isFinite(seconds) ? Math.min(seconds * 1000, 4000) : 900;
 }
 
-async function goldrushFetch<T>(path: string): Promise<{ data: T | null; state: FetchState; reason?: string }> {
+export async function goldrushFetch<T>(path: string): Promise<{ data: T | null; state: FetchState; reason?: string }> {
   const apiKey = getApiKey();
   const url = buildUrl(path);
   const cached = getCached<T>(url, CACHE_TTL_MS);
   if (cached) return { data: cached, state: "fresh" };
+  const staleCached = getAnyCached<T>(url);
 
   if (!apiKey) {
-    return { data: null, state: "fallback", reason: "missing_api_key" };
+    return staleCached
+      ? { data: staleCached, state: "stale", reason: "No chain evidence available" }
+      : { data: null, state: "fallback", reason: "No chain evidence available" };
   }
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -126,20 +151,18 @@ async function goldrushFetch<T>(path: string): Promise<{ data: T | null; state: 
       }
 
       if (!response.ok) {
-        return {
-          data: null,
-          state: "fallback",
-          reason: `http_${response.status}`,
-        };
+        if (attempt === 0) continue;
+        return staleCached
+          ? { data: staleCached, state: "stale", reason: `goldrush_http_${response.status}` }
+          : { data: null, state: "fallback", reason: `goldrush_http_${response.status}` };
       }
 
       const payload = (await response.json()) as GoldRushEnvelope<T>;
       if (payload.error) {
-        return {
-          data: null,
-          state: "fallback",
-          reason: payload.error_message ?? "goldrush_error",
-        };
+        if (attempt === 0) continue;
+        return staleCached
+          ? { data: staleCached, state: "stale", reason: payload.error_message ?? "goldrush_error" }
+          : { data: null, state: "fallback", reason: payload.error_message ?? "goldrush_error" };
       }
 
       if (payload.data) {
@@ -153,16 +176,18 @@ async function goldrushFetch<T>(path: string): Promise<{ data: T | null; state: 
       }
 
       return {
-        data: null,
+        data: staleCached ?? null,
         state: error instanceof GoldRushRateLimitError ? "stale" : "fallback",
-        reason: error instanceof GoldRushRateLimitError ? "rate_limited" : "request_failed",
+        reason: "No chain evidence available",
       };
     } finally {
       clearTimeout(timeout);
     }
   }
 
-  return { data: null, state: "stale", reason: "rate_limited" };
+  return staleCached
+    ? { data: staleCached, state: "stale", reason: "No chain evidence available" }
+    : { data: null, state: "stale", reason: "No chain evidence available" };
 }
 
 function scaledAmount(rawBalance?: string | null, decimals?: number | null) {
@@ -198,8 +223,9 @@ function inferTransactionToken(item: GoldRushTransactionItem) {
   return item.log_events?.find((event) => event.sender_contract_ticker_symbol)?.sender_contract_ticker_symbol ?? "UNKNOWN";
 }
 
-function normalizeBalances(items: GoldRushBalanceItem[] = []): WalletBalance[] {
+function normalizeBalances(items: GoldRushBalanceItem[] = [], observedAt?: string | null): WalletBalance[] {
   const positiveItems = items
+    .filter((item) => !item.is_spam)
     .map((item) => {
       const valueUsd = Number(item.quote ?? item.balance_quote ?? 0);
       const symbol = item.contract_ticker_symbol?.trim() || "UNKNOWN";
@@ -239,14 +265,17 @@ function normalizeBalances(items: GoldRushBalanceItem[] = []): WalletBalance[] {
 
   return groupedItems.slice(0, 12).map(({ item, valueUsd, symbol, change24h }) => {
     const concentration = total > 0 ? Math.round((valueUsd / total) * 100) : 0;
-    return {
+      return {
       symbol,
       name: item.contract_name?.trim() || symbol,
+      mintAddress: item.contract_address?.trim() || undefined,
+      decimals: item.contract_decimals ?? undefined,
       amount: scaledAmount(item.balance, item.contract_decimals),
       valueUsd,
       change24h,
       concentration,
       risk: tokenRisk(valueUsd, concentration, change24h),
+      lastTransferredAt: item.last_transferred_at?.trim() || observedAt?.trim() || undefined,
     };
   });
 }
@@ -287,6 +316,10 @@ function watchlistAddresses() {
   return configured.length ? configured : DEFAULT_WATCHLIST;
 }
 
+export function configuredOrDefaultWatchlistAddresses() {
+  return watchlistAddresses();
+}
+
 function alertKind(type: WalletTransaction["type"], risk: RiskLevel): AlertKind {
   if (risk === "critical" || risk === "high") return "suspicious_movement";
   if (type === "swap") return "dex_activity";
@@ -318,6 +351,7 @@ function alertKindRank(kind: AlertKind) {
     accumulation_burst: 7,
     dex_activity_spike: 6,
     suspicious_transfer_surge: 6,
+    agent_detection: 5,
     suspicious_movement: 4,
     dex_activity: 3,
     large_transfer: 2,
@@ -338,6 +372,7 @@ function titleForTransactionAlert(kind: AlertKind) {
     accumulation_burst: "Large Transfer",
     dex_activity_spike: "DEX Activity Spike",
     suspicious_transfer_surge: "High-Value Transfer",
+    agent_detection: "Agent Detection",
     suspicious_movement: "High-Risk Transaction",
     dex_activity: "DEX Activity Detected",
     large_transfer: "Large Transfer Detected",
@@ -381,8 +416,8 @@ function buildRiskSignals(balances: WalletBalance[], transactions: WalletTransac
 }
 
 export async function getWalletBalances(address: string): Promise<{ data: WalletBalance[]; source: "goldrush" | "fallback"; reason?: string }> {
-  const result = await goldrushFetch<{ items?: GoldRushBalanceItem[] }>(`${CHAIN}/address/${encodeURIComponent(address)}/balances_v2/`);
-  const balances = result.data ? normalizeBalances(result.data.items) : [];
+  const result = await goldrushFetch<{ updated_at?: string | null; items?: GoldRushBalanceItem[] }>(`${CHAIN}/address/${encodeURIComponent(address)}/balances_v2/`);
+  const balances = result.data ? normalizeBalances(result.data.items, result.data.updated_at) : [];
 
   return {
     data: balances,
@@ -392,14 +427,55 @@ export async function getWalletBalances(address: string): Promise<{ data: Wallet
 }
 
 export async function getWalletTransactions(address: string): Promise<{ data: WalletTransaction[]; source: "goldrush" | "fallback"; reason?: string }> {
-  const result = await goldrushFetch<{ items?: GoldRushTransactionItem[] }>(
-    `${CHAIN}/address/${encodeURIComponent(address)}/transactions_v3/page/0/`,
+  const recent = await goldrushFetch<{ items?: GoldRushTransactionItem[] }>(
+    `${CHAIN}/address/${encodeURIComponent(address)}/transactions_v3/`,
   );
+  const result = recent.state === "fresh"
+    ? recent
+    : await goldrushFetch<{ items?: GoldRushTransactionItem[] }>(
+      `${CHAIN}/address/${encodeURIComponent(address)}/transactions_v3/page/0/`,
+    );
 
   const transactions = result.data ? normalizeTransactions(result.data.items, address) : [];
 
   return {
     data: transactions,
+    source: result.state === "fresh" ? "goldrush" : "fallback",
+    reason: result.reason,
+  };
+}
+
+export async function getWalletEventEvidence(address: string): Promise<{ data: GoldRushEventEvidence[]; source: "goldrush" | "fallback"; reason?: string }> {
+  const recent = await goldrushFetch<{ items?: GoldRushTransactionItem[] }>(
+    `${CHAIN}/address/${encodeURIComponent(address)}/transactions_v3/`,
+  );
+  const result = recent.state === "fresh"
+    ? recent
+    : await goldrushFetch<{ items?: GoldRushTransactionItem[] }>(
+      `${CHAIN}/address/${encodeURIComponent(address)}/transactions_v3/page/0/`,
+    );
+
+  const data = result.data?.items?.flatMap((item) => {
+    if (!item.tx_hash || !item.block_signed_at) return [];
+    const amountUsd = Number(item.value_quote ?? item.gas_quote ?? 0);
+    const logEvents = item.log_events ?? [];
+
+    return [{
+      txHash: item.tx_hash,
+      timestamp: item.block_signed_at,
+      fromAddress: item.from_address ?? undefined,
+      toAddress: item.to_address ?? undefined,
+      amountUsd: Number.isFinite(amountUsd) ? Math.max(amountUsd, 0) : 0,
+      successful: item.successful,
+      decodedNames: logEvents.map((event) => event.decoded?.name?.trim()).filter(Boolean) as string[],
+      senderSymbols: logEvents.map((event) => event.sender_contract_ticker_symbol?.trim()).filter(Boolean) as string[],
+      senderNames: logEvents.map((event) => event.sender_name?.trim()).filter(Boolean) as string[],
+      senderAddresses: logEvents.map((event) => event.sender_address?.trim()).filter(Boolean) as string[],
+    }];
+  }) ?? [];
+
+  return {
+    data,
     source: result.state === "fresh" ? "goldrush" : "fallback",
     reason: result.reason,
   };
@@ -417,13 +493,14 @@ export async function getWalletRiskSignals(address: string): Promise<RiskSignals
 
 export async function getWalletReport(address: string): Promise<WalletReport> {
   const [balanceResult, transactionResult] = await Promise.all([getWalletBalances(address), getWalletTransactions(address)]);
-  const signals = buildRiskSignals(balanceResult.data, transactionResult.data);
-  const score = calculateRiskScore(balanceResult.data, transactionResult.data, signals);
+  const transactions = transactionResult.data;
+  const signals = buildRiskSignals(balanceResult.data, transactions);
+  const score = calculateRiskScore(balanceResult.data, transactions, signals);
 
   return {
     address,
     balances: balanceResult.data,
-    transactions: transactionResult.data,
+    transactions,
     signals,
     score,
     level: riskLevel(score),
@@ -470,13 +547,51 @@ function buildTransactionAlert(address: string, transaction: WalletTransaction, 
   };
 }
 
-export async function getLiveAlertFeed(): Promise<AlertFeed> {
-  const addresses = watchlistAddresses().slice(0, 6);
-  if (!addresses.length) {
+function buildBalanceAlert(address: string, balance: WalletBalance): SentinelAlert {
+  const severity = balance.risk === "low" && balance.valueUsd >= 50_000 ? "moderate" : balance.risk;
+
+  return {
+    id: `balance:${address}:${balance.mintAddress ?? balance.symbol}`,
+    kind: "suspicious_movement",
+    wallet: address,
+    token: balance.symbol,
+    amountUsd: balance.valueUsd,
+    venue: "Balance evidence",
+    timestamp: balance.lastTransferredAt ?? "",
+    severity,
+    title: "GoldRush Balance Signal",
+    summary: `${balance.symbol} visible balance is ${balance.valueUsd >= 1 ? `$${Math.round(balance.valueUsd).toLocaleString()}` : "unpriced"} from GoldRush balances.`,
+    reason: `${balance.symbol} was returned by GoldRush balances with ${balance.concentration}% visible portfolio concentration.`,
+    sourceLabel: "GoldRush balances",
+    group: "Wallet activity",
+  };
+}
+
+export function buildAgentAlert(detection: AgentDetection): SentinelAlert {
+  return {
+    id: detection.id,
+    kind: "agent_detection",
+    wallet: detection.wallet,
+    token: "AGENT",
+    amountUsd: 0,
+    venue: "AI Agent",
+    timestamp: detection.timestamp,
+    severity: detection.severity,
+    title: detection.title,
+    summary: detection.signals.join(", "),
+    reason: detection.evidence.join(" "),
+    sourceLabel: "GoldRush agent detector",
+    group: "Agent monitoring",
+  };
+}
+
+export async function getLiveAlertFeedForAddresses(addresses: string[]): Promise<AlertFeed> {
+  const scopedAddresses = addresses.slice(0, 6);
+  if (!scopedAddresses.length) {
     return { alerts: [], source: "empty", reason: "no_watchlist_configured" };
   }
 
-  const snapshots = (await Promise.all(addresses.map((address) => getGoldRushWalletSnapshot(address)))).filter(Boolean) as Array<
+  const snapshots = (await Promise.all(scopedAddresses.map((address) => getGoldRushWalletSnapshot(address)))).filter(Boolean) as Array<
     NonNullable<Awaited<ReturnType<typeof getGoldRushWalletSnapshot>>>
   >;
 
@@ -495,6 +610,12 @@ export async function getLiveAlertFeed(): Promise<AlertFeed> {
         .slice(0, 5)
         .map((transaction) => buildTransactionAlert(snapshot.address, transaction, snapshot.transactions)),
     ),
+    ...snapshots.flatMap((snapshot) =>
+      snapshot.balances
+        .filter((balance) => balance.lastTransferredAt && (balance.valueUsd >= 1_000 || balance.concentration >= 35))
+        .slice(0, 2)
+        .map((balance) => buildBalanceAlert(snapshot.address, balance)),
+    ),
   ].filter(Boolean) as SentinelAlert[])
     .slice(0, 12);
 
@@ -502,6 +623,10 @@ export async function getLiveAlertFeed(): Promise<AlertFeed> {
     alerts,
     source: "goldrush",
   };
+}
+
+export async function getLiveAlertFeed(): Promise<AlertFeed> {
+  return getLiveAlertFeedForAddresses(watchlistAddresses());
 }
 
 export async function getLiveAlerts() {

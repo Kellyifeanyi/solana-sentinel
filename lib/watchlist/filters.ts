@@ -12,10 +12,15 @@ const PROGRAM_OR_JUNK_LABELS = [
 ];
 
 export function parseAddressList(value?: string) {
-  return value
-    ?.split(",")
+  const seen = new Set<string>();
+  return (value ?? "")
+    .split(",")
     .map((address) => address.trim())
-    .filter(Boolean) ?? [];
+    .filter((address) => {
+      if (!address || seen.has(address) || !isLikelySolanaWalletAddress(address)) return false;
+      seen.add(address);
+      return true;
+    });
 }
 
 export function isLikelySolanaWalletAddress(address: string) {
@@ -47,6 +52,7 @@ export function isLikelyRealWallet({
       .filter((counterparty) => counterparty && !isLikelyProgramOrJunkAddress(counterparty)),
   );
 
+  if (balances.length > 0) return true;
   if (totalValue <= 0 && meaningfulTransactions.length < 2) return false;
   if (transactions.length >= 4 && uniqueCounterparties.size === 0) return false;
 

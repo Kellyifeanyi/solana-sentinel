@@ -10,7 +10,7 @@ export function usePremiumInsight(wallet: string) {
   async function requestInsight() {
     setLoading(true);
     try {
-      const probe = await fetch(`/api/premium-insight/${encodeURIComponent(wallet)}`);
+      const probe = await fetch(`/api/premium/${encodeURIComponent(wallet)}`);
       if (probe.status === 402) {
         setRequiresPayment(true);
         setInsight(null);

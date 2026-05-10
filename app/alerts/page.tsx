@@ -1,15 +1,22 @@
 import Link from "next/link";
 import { ArrowLeft, RadioTower, ShieldAlert, TrendingUp } from "lucide-react";
+import { AgentPanel } from "@/components/dashboard/agent-panel";
 import { LiveAlertFeed } from "@/components/dashboard/live-alert-feed";
 import { Card } from "@/components/ui/card";
 import { MobileNav } from "@/components/mobile-nav";
 import { ConnectWalletButton } from "@/components/wallet/connect-wallet-button";
-import { getLiveAlertFeed } from "@/lib/goldrush";
+import { monitorAgentWatchlist } from "@/lib/agents/monitor";
+import { buildAgentAlert, getLiveAlertFeedForAddresses } from "@/lib/goldrush";
 import { formatUsd } from "@/lib/utils";
+import { generateWatchlist } from "@/lib/watchlist/generate";
 
 export default async function AlertsPage() {
-  const feed = await getLiveAlertFeed();
-  const alerts = feed.alerts;
+  const watchlist = await generateWatchlist();
+  const wallets = watchlist.wallets.map((wallet) => wallet.address);
+  const [feed, agents] = wallets.length
+    ? await Promise.all([getLiveAlertFeedForAddresses(wallets), monitorAgentWatchlist(wallets)])
+    : [{ alerts: [], source: "empty" as const, reason: watchlist.reason }, { status: "insufficient evidence" as const, detections: [], reason: watchlist.reason }];
+  const alerts = [...feed.alerts, ...agents.detections.map(buildAgentAlert)];
   const notional = alerts.reduce((sum, alert) => sum + alert.amountUsd, 0);
 
   return (
@@ -43,6 +50,10 @@ export default async function AlertsPage() {
 
         <section className="mt-4 pb-10">
           <LiveAlertFeed alerts={alerts} animated />
+        </section>
+
+        <section className="mt-4 pb-10">
+          <AgentPanel detections={agents.detections} status={agents.status} />
         </section>
       </div>
     </main>

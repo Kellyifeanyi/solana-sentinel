@@ -12,6 +12,8 @@ const features = [
 ];
 
 export default function Home() {
+  const appName = process.env.NEXT_PUBLIC_APP_NAME?.trim() || "Solana Sentinel";
+
   return (
     <main className="sentinel-shell min-h-screen">
       <section className="relative mx-auto flex min-h-[78vh] max-w-7xl flex-col px-4 py-5 sm:px-6 sm:py-7">
@@ -21,7 +23,7 @@ export default function Home() {
               <Radar className="size-5" />
             </div>
             <div>
-              <span className="text-sm font-semibold uppercase tracking-[0.24em] text-white">Solana Sentinel</span>
+              <span className="text-sm font-semibold uppercase tracking-[0.24em] text-white">{appName}</span>
               <p className="mt-0.5 text-xs text-slate-500">Onchain intelligence terminal</p>
             </div>
           </div>

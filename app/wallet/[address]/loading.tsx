@@ -9,9 +9,9 @@ export default function WalletLoading() {
           <Skeleton className="h-10 w-full lg:w-[430px]" />
         </div>
         <section className="mt-8 grid gap-4 md:grid-cols-3">
-          <Skeleton className="h-32" />
-          <Skeleton className="h-32" />
-          <Skeleton className="h-32" />
+          <div className="rounded-md border border-white/10 bg-white/[.035] p-5 text-sm text-slate-300">Scanning GoldRush data...</div>
+          <div className="rounded-md border border-white/10 bg-white/[.035] p-5 text-sm text-slate-300">Computing whale score...</div>
+          <div className="rounded-md border border-white/10 bg-white/[.035] p-5 text-sm text-slate-300">Checking transaction patterns...</div>
         </section>
         <section className="mt-4 grid gap-4 lg:grid-cols-[380px_1fr]">
           <Skeleton className="h-[430px]" />

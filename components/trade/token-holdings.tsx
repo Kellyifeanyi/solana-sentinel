@@ -3,19 +3,38 @@
 import { ArrowRightLeft } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ActionDrawer } from "@/components/trade/action-drawer";
-import { Button } from "@/components/ui/button";
-import { actionPair, tradeToken, type TradeTokenSymbol } from "@/lib/trading/tokens";
+import { actionPair, detectedTokenPair, tradeToken, type TradeTokenSymbol } from "@/lib/trading/tokens";
 import { formatUsd } from "@/lib/utils";
 import type { SignalAction } from "@/types/signal-action";
 import type { WalletBalance } from "@/types/sentinel";
 
 function actionForBalance(balance: WalletBalance): SignalAction | null {
   const token = tradeToken(balance.symbol);
-  if (!token) return null;
+  if (!token && !balance.mintAddress) return null;
 
-  const input = token.symbol as TradeTokenSymbol;
+  if (!token && balance.mintAddress) {
+    return {
+      id: `holding-usdc-${balance.symbol.toLowerCase()}-${balance.mintAddress}`,
+      title: `Buy ${balance.symbol} with USDC`,
+      reason: `${balance.symbol} is present in GoldRush balances with ${formatUsd(balance.valueUsd)} tracked value.`,
+      suggestedAction: `Preview a USDC to ${balance.symbol} Jupiter route.`,
+      tokenPair: detectedTokenPair({
+        input: "USDC",
+        output: balance.symbol,
+        outputMint: balance.mintAddress,
+        outputDecimals: balance.decimals,
+        amount: 25,
+      }),
+      supportingSignals: [
+        `${balance.symbol} balance amount is ${balance.amount.toLocaleString(undefined, { maximumFractionDigits: 6 })}.`,
+        `Detected mint ${balance.mintAddress}.`,
+      ],
+    };
+  }
+
+  const input = token!.symbol as TradeTokenSymbol;
   const output: TradeTokenSymbol = input === "USDC" ? "SOL" : "USDC";
-  const amount = input === "SOL" ? Math.min(Math.max(balance.amount * 0.05, 0.01), 0.05) : input === "JUP" ? Math.min(Math.max(balance.amount * 0.05, 1), 5) : 25;
+  const amount = input === "SOL" ? Math.min(Math.max(balance.amount * 0.05, 0.01), 0.05) : 25;
 
   return {
     id: `holding-${input.toLowerCase()}-${output.toLowerCase()}`,
@@ -67,24 +86,10 @@ export function TokenHoldings({ balances }: { balances: WalletBalance[] }) {
           );
         })}
       </div>
-      <div className="mt-3">
-        <Button variant="secondary" onClick={() => setSelected(defaultSwapAction())} className="w-full sm:w-auto">
-          <ArrowRightLeft className="size-4" />
-          Open Swap Terminal
-        </Button>
-      </div>
+      {!holdings.some(({ action }) => action) && (
+        <div className="mt-3 rounded-md border border-white/10 bg-white/[.03] p-4 text-sm text-slate-400">No chain evidence available</div>
+      )}
       <ActionDrawer action={selected} quote={null} open={Boolean(selected)} onClose={() => setSelected(null)} />
     </>
   );
-}
-
-function defaultSwapAction(): SignalAction {
-  return {
-    id: "manual-usdc-sol",
-    title: "Swap Terminal",
-    reason: "Manual Jupiter route preview. Execution requires a connected wallet and a real Jupiter route.",
-    suggestedAction: "Preview a USDC to SOL swap route.",
-    tokenPair: actionPair("USDC", "SOL", 25),
-    supportingSignals: ["No intelligence signal is attached to this manual swap."],
-  };
 }

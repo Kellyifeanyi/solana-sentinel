@@ -18,7 +18,7 @@ export function PremiumInsight({ wallet, evidenceAvailable }: { wallet: string; 
         {evidenceAvailable && (
           <Button onClick={requestInsight} disabled={loading} className="shrink-0">
             <ReceiptText className="size-4" />
-            {loading ? "Requesting" : "Request x402"}
+            {loading ? "Scanning GoldRush data..." : "Request x402"}
           </Button>
         )}
       </div>

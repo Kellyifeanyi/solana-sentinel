@@ -19,7 +19,9 @@ export function formatUsd(value: number) {
 }
 
 export function formatRelativeTime(date: string) {
-  const delta = Date.now() - new Date(date).getTime();
+  const timestamp = new Date(date).getTime();
+  if (!date || !Number.isFinite(timestamp)) return "unavailable";
+  const delta = Date.now() - timestamp;
   const minutes = Math.max(1, Math.round(delta / 60000));
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.round(minutes / 60);

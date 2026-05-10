@@ -7,7 +7,6 @@ import { ActionDrawer } from "@/components/trade/action-drawer";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { getJupiterQuote } from "@/lib/trading/swap-provider";
-import { actionPair } from "@/lib/trading/tokens";
 import type { SignalAction, SwapQuotePreview } from "@/types/signal-action";
 
 function actionLabel(action: SignalAction) {
@@ -73,13 +72,11 @@ export function ActionOpportunities({ actions }: { actions: SignalAction[] }) {
               <p className="text-sm font-semibold text-white">Swap Terminal</p>
               <p className="mt-1 text-sm leading-6 text-slate-400">Buy, sell, or swap with Jupiter route preview.</p>
             </div>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              {manualActions().map((action) => (
-                <Button key={action.id} variant="secondary" onClick={() => setSelected(action)} className="w-full sm:w-auto">
-                  {actionLabel(action)}
-                </Button>
-              ))}
-            </div>
+            {actions.length > 0 && (
+              <Button variant="secondary" onClick={() => setSelected(actions[0])} className="w-full sm:w-auto">
+                Preview Evidence Route
+              </Button>
+            )}
           </div>
           {!connected && <p className="mt-3 text-sm text-slate-400">Connect wallet to execute</p>}
         </div>
@@ -90,7 +87,7 @@ export function ActionOpportunities({ actions }: { actions: SignalAction[] }) {
           </div>
         ) : !routableActions.length ? (
           <div className="mt-5 rounded-md border border-white/10 bg-white/[.035] p-4 text-sm leading-6 text-slate-400">
-            {actions.length > 0 && loadingRoutes ? "Loading Jupiter routes." : "No route available."}
+            {actions.length > 0 && loadingRoutes ? "Fetching route..." : "No chain evidence available"}
           </div>
         ) : (
           <div className="mt-5 grid gap-3 md:grid-cols-2">
@@ -122,33 +119,4 @@ export function ActionOpportunities({ actions }: { actions: SignalAction[] }) {
       <ActionDrawer action={selected} quote={selected ? quotes[selected.id] ?? null : null} open={Boolean(selected)} onClose={() => setSelected(null)} />
     </>
   );
-}
-
-function manualActions(): SignalAction[] {
-  return [
-    {
-      id: "manual-buy-sol",
-      title: "Buy SOL",
-      reason: "Manual Jupiter route preview. Execution requires a connected wallet and a real Jupiter route.",
-      suggestedAction: "Preview a USDC to SOL route.",
-      tokenPair: actionPair("USDC", "SOL", 25),
-      supportingSignals: ["No intelligence signal is attached to this manual buy flow."],
-    },
-    {
-      id: "manual-sell-sol",
-      title: "Sell SOL",
-      reason: "Manual Jupiter route preview. Execution requires a connected wallet and a real Jupiter route.",
-      suggestedAction: "Preview a SOL to USDC route.",
-      tokenPair: actionPair("SOL", "USDC", 0.05),
-      supportingSignals: ["No intelligence signal is attached to this manual sell flow."],
-    },
-    {
-      id: "manual-swap-jup",
-      title: "Swap JUP",
-      reason: "Manual Jupiter route preview. Execution requires a connected wallet and a real Jupiter route.",
-      suggestedAction: "Preview a JUP to USDC route.",
-      tokenPair: actionPair("JUP", "USDC", 5),
-      supportingSignals: ["No intelligence signal is attached to this manual swap flow."],
-    },
-  ];
 }

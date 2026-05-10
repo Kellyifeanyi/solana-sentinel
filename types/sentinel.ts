@@ -6,16 +6,20 @@ export type AlertKind =
   | "suspicious_transfer_surge"
   | "large_transfer"
   | "dex_activity"
-  | "suspicious_movement";
+  | "suspicious_movement"
+  | "agent_detection";
 
 export type WalletBalance = {
   symbol: string;
   name: string;
+  mintAddress?: string;
+  decimals?: number;
   amount: number;
   valueUsd: number;
   change24h: number;
   risk: RiskLevel;
   concentration: number;
+  lastTransferredAt?: string;
 };
 
 export type WalletTransaction = {
@@ -79,4 +83,46 @@ export type AlertFeed = {
   alerts: SentinelAlert[];
   source: "goldrush" | "fallback" | "empty";
   reason?: string;
+};
+
+export type WhaleClassification = "dormant" | "waking" | "emerging" | "active" | "whale-risk" | "insufficient evidence";
+
+export type EvidenceSignal = {
+  signal: string;
+  severity: RiskLevel;
+  confidence: number;
+  evidence: string;
+};
+
+export type WhaleScore = {
+  wallet: string;
+  classification: WhaleClassification;
+  score: number;
+  confidence: number;
+  reason: string;
+  signals: EvidenceSignal[];
+};
+
+export type WatchlistWallet = {
+  address: string;
+  score: number;
+  confidence: number;
+  reason: string;
+  source: "goldrush";
+  signals: EvidenceSignal[];
+};
+
+export type AgentDetectionType = "drainer_approval" | "liquidity_pull" | "phishing_airdrop";
+
+export type AgentDetection = {
+  id: string;
+  type: AgentDetectionType;
+  wallet: string;
+  severity: RiskLevel;
+  confidence: number;
+  title: string;
+  status: "detected" | "insufficient evidence";
+  signals: string[];
+  evidence: string[];
+  timestamp: string;
 };
