@@ -7,20 +7,21 @@ export function usePremiumInsight(wallet: string) {
   const [insight, setInsight] = useState<string | null>(null);
   const [requiresPayment, setRequiresPayment] = useState(false);
 
-  async function unlock() {
+  async function requestInsight() {
     setLoading(true);
     try {
       const probe = await fetch(`/api/premium-insight/${encodeURIComponent(wallet)}`);
       if (probe.status === 402) {
         setRequiresPayment(true);
+        setInsight(null);
+        return;
       }
-      const paid = await fetch(`/api/premium-insight/${encodeURIComponent(wallet)}?paid=true`);
-      const payload = (await paid.json()) as { insight?: string };
-      setInsight(payload.insight ?? "Insufficient chain evidence for premium intelligence.");
+      const payload = (await probe.json()) as { insight?: string | null };
+      setInsight(payload.insight ?? null);
     } finally {
       setLoading(false);
     }
   }
 
-  return { loading, insight, requiresPayment, unlock };
+  return { loading, insight, requiresPayment, requestInsight };
 }

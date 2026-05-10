@@ -1,26 +1,21 @@
-import { detectAutoWhales } from "@/lib/discovery/auto-whale-detection";
-import type { RecentActivityCandidate } from "@/lib/discovery/activity-scanner";
-import { detectWhaleEmergence } from "@/lib/intelligence/whale-emergence";
 import { buildRecommendations, calculateRiskScore, riskLevel } from "@/lib/risk-engine";
-import { buildAutoWatchlist, configuredWatchlistAddresses } from "@/lib/watchlist/auto-watchlist";
+import { configuredWatchlistAddresses } from "@/lib/watchlist/auto-watchlist";
 import type {
   AlertKind,
   AlertFeed,
-  AutoWatchlistEntry,
   RiskLevel,
   RiskSignals,
+  SentinelAlert,
   SuspiciousToken,
   WalletBalance,
   WalletReport,
   WalletTransaction,
-  WhaleAlert,
 } from "@/types/sentinel";
 
 const CHAIN = "solana-mainnet";
 const BASE_URL = "https://api.covalenthq.com/v1";
 const REQUEST_TIMEOUT_MS = 7000;
 const CACHE_TTL_MS = 60_000;
-const STALE_TTL_MS = 10 * 60_000;
 const DEFAULT_WATCHLIST: string[] = [];
 
 type FetchState = "fresh" | "stale" | "fallback";
@@ -60,13 +55,6 @@ type GoldRushTransactionItem = {
     sender_address?: string | null;
     decoded?: { name?: string | null } | null;
   }> | null;
-};
-
-type GoldRushBlockItem = {
-  height?: number | string | null;
-  block_height?: number | string | null;
-  block_signed_at?: string | null;
-  signed_at?: string | null;
 };
 
 type CacheEntry<T> = {
@@ -116,7 +104,7 @@ async function goldrushFetch<T>(path: string): Promise<{ data: T | null; state: 
   if (cached) return { data: cached, state: "fresh" };
 
   if (!apiKey) {
-    return { data: getCached<T>(url, STALE_TTL_MS), state: "fallback", reason: "missing_api_key" };
+    return { data: null, state: "fallback", reason: "missing_api_key" };
   }
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -139,7 +127,7 @@ async function goldrushFetch<T>(path: string): Promise<{ data: T | null; state: 
 
       if (!response.ok) {
         return {
-          data: getCached<T>(url, STALE_TTL_MS),
+          data: null,
           state: "fallback",
           reason: `http_${response.status}`,
         };
@@ -148,7 +136,7 @@ async function goldrushFetch<T>(path: string): Promise<{ data: T | null; state: 
       const payload = (await response.json()) as GoldRushEnvelope<T>;
       if (payload.error) {
         return {
-          data: getCached<T>(url, STALE_TTL_MS),
+          data: null,
           state: "fallback",
           reason: payload.error_message ?? "goldrush_error",
         };
@@ -165,7 +153,7 @@ async function goldrushFetch<T>(path: string): Promise<{ data: T | null; state: 
       }
 
       return {
-        data: getCached<T>(url, STALE_TTL_MS),
+        data: null,
         state: error instanceof GoldRushRateLimitError ? "stale" : "fallback",
         reason: error instanceof GoldRushRateLimitError ? "rate_limited" : "request_failed",
       };
@@ -174,7 +162,7 @@ async function goldrushFetch<T>(path: string): Promise<{ data: T | null; state: 
     }
   }
 
-  return { data: getCached<T>(url, STALE_TTL_MS), state: "stale", reason: "rate_limited" };
+  return { data: null, state: "stale", reason: "rate_limited" };
 }
 
 function scaledAmount(rawBalance?: string | null, decimals?: number | null) {
@@ -226,9 +214,30 @@ function normalizeBalances(items: GoldRushBalanceItem[] = []): WalletBalance[] {
     .filter(({ valueUsd, symbol }) => valueUsd > 0 || symbol !== "UNKNOWN")
     .sort((a, b) => b.valueUsd - a.valueUsd);
 
-  const total = positiveItems.reduce((sum, { valueUsd }) => sum + valueUsd, 0);
+  const knownItems = positiveItems.filter(({ symbol }) => symbol.toUpperCase() !== "UNKNOWN");
+  const unknownItems = positiveItems.filter(({ symbol }) => symbol.toUpperCase() === "UNKNOWN");
+  const unknownValue = unknownItems.reduce((sum, { valueUsd }) => sum + valueUsd, 0);
+  const unknownAmount = unknownItems.reduce((sum, { item }) => sum + scaledAmount(item.balance, item.contract_decimals), 0);
+  const groupedItems = [
+    ...knownItems,
+    ...(unknownItems.length
+      ? [{
+        item: {
+          contract_name: unknownItems.length === 1 ? "Unknown asset" : "Unknown assets",
+          contract_ticker_symbol: "UNKNOWN",
+          balance: String(unknownAmount),
+          contract_decimals: 0,
+        },
+        valueUsd: unknownValue,
+        symbol: "UNKNOWN",
+        change24h: 0,
+      }]
+      : []),
+  ].sort((a, b) => b.valueUsd - a.valueUsd);
 
-  return positiveItems.slice(0, 12).map(({ item, valueUsd, symbol, change24h }) => {
+  const total = groupedItems.reduce((sum, { valueUsd }) => sum + valueUsd, 0);
+
+  return groupedItems.slice(0, 12).map(({ item, valueUsd, symbol, change24h }) => {
     const concentration = total > 0 ? Math.round((valueUsd / total) * 100) : 0;
     return {
       symbol,
@@ -242,7 +251,18 @@ function normalizeBalances(items: GoldRushBalanceItem[] = []): WalletBalance[] {
   });
 }
 
-function normalizeTransactions(items: GoldRushTransactionItem[] = []): WalletTransaction[] {
+function transactionDirection(item: GoldRushTransactionItem, address: string): WalletTransaction["direction"] {
+  const normalizedAddress = address.toLowerCase();
+  const from = item.from_address?.toLowerCase();
+  const to = item.to_address?.toLowerCase();
+
+  if (from === normalizedAddress && to === normalizedAddress) return "self";
+  if (from === normalizedAddress) return "outbound";
+  if (to === normalizedAddress) return "inbound";
+  return "unknown";
+}
+
+function normalizeTransactions(items: GoldRushTransactionItem[] = [], address: string): WalletTransaction[] {
   return items.flatMap((item) => {
     if (!item.tx_hash || !item.block_signed_at) return [];
     const amountUsd = Number(item.value_quote ?? item.gas_quote ?? 0);
@@ -253,6 +273,9 @@ function normalizeTransactions(items: GoldRushTransactionItem[] = []): WalletTra
       token: inferTransactionToken(item),
       amountUsd: normalizedAmount,
       counterparty: item.to_address ?? item.from_address ?? "unknown",
+      fromAddress: item.from_address ?? undefined,
+      toAddress: item.to_address ?? undefined,
+      direction: transactionDirection(item, address),
       timestamp: item.block_signed_at,
       risk: transactionRisk(normalizedAmount, item.successful),
     }];
@@ -292,13 +315,8 @@ function severityRank(severity: RiskLevel) {
 
 function alertKindRank(kind: AlertKind) {
   const ranks: Record<AlertKind, number> = {
-    whale_emergence: 8,
     accumulation_burst: 7,
     dex_activity_spike: 6,
-    risk_profile_changed: 5,
-    new_watchlist_wallet: 5,
-    activity_cluster_burst: 6,
-    dormant_to_active: 5,
     suspicious_transfer_surge: 6,
     suspicious_movement: 4,
     dex_activity: 3,
@@ -317,22 +335,17 @@ function transactionAlertKind(transaction: WalletTransaction, walletTransactions
 
 function titleForTransactionAlert(kind: AlertKind) {
   const titles: Record<AlertKind, string> = {
-    whale_emergence: "Whale Emergence Detected",
-    accumulation_burst: "Large Accumulation Burst",
-    dex_activity_spike: "Sudden DEX Activity Spike",
-    risk_profile_changed: "Risk Profile Changed",
-    new_watchlist_wallet: "New Wallet Enters Watchlist",
-    activity_cluster_burst: "Activity Cluster Burst",
-    dormant_to_active: "Wallet Goes From Dormant to Active",
-    suspicious_transfer_surge: "Suspicious Transfer Surge",
-    suspicious_movement: "Suspicious Transfer Surge",
+    accumulation_burst: "Large Transfer",
+    dex_activity_spike: "DEX Activity Spike",
+    suspicious_transfer_surge: "High-Value Transfer",
+    suspicious_movement: "High-Risk Transaction",
     dex_activity: "DEX Activity Detected",
     large_transfer: "Large Transfer Detected",
   };
   return titles[kind];
 }
 
-function sortBreakingAlerts(alerts: WhaleAlert[]) {
+function sortBreakingAlerts(alerts: SentinelAlert[]) {
   return [...alerts].sort((a, b) => {
     const severityDelta = severityRank(b.severity) - severityRank(a.severity);
     if (severityDelta) return severityDelta;
@@ -349,39 +362,12 @@ function buildRiskSignals(balances: WalletBalance[], transactions: WalletTransac
   const largestPosition = balances[0]?.concentration ?? 0;
   const highRiskTxCount = transactions.filter((tx) => tx.risk === "high" || tx.risk === "critical").length;
   const totalTxVolume = transactions.reduce((sum, tx) => sum + tx.amountUsd, 0);
-  const repeatedElevatedTokenActivity = new Map<string, number>();
-  for (const transaction of transactions) {
-    if (transaction.token === "UNKNOWN") continue;
-    if (transaction.risk === "high" || transaction.risk === "critical") {
-      repeatedElevatedTokenActivity.set(transaction.token, (repeatedElevatedTokenActivity.get(transaction.token) ?? 0) + 1);
-    }
-  }
-
-  const suspiciousTokens: SuspiciousToken[] = balances
-    .filter((balance) => balance.concentration >= 45 || (repeatedElevatedTokenActivity.get(balance.symbol) ?? 0) >= 2)
-    .slice(0, 5)
-    .map((balance) => {
-      const elevatedCount = repeatedElevatedTokenActivity.get(balance.symbol) ?? 0;
-      const evidence = [
-        balance.concentration >= 45 ? `${balance.symbol} represents ${balance.concentration}% of visible GoldRush balance value.` : null,
-        elevatedCount >= 2 ? `${elevatedCount} elevated-notional tracked transactions reference ${balance.symbol}.` : null,
-      ].filter(Boolean) as string[];
-
-      return {
-        symbol: balance.symbol,
-        reason: evidence.join(" "),
-        severity: balance.concentration >= 60 || elevatedCount >= 4 ? "high" : "moderate",
-        exposureUsd: balance.valueUsd,
-        confidence: evidence.length >= 2 ? "high" : "moderate",
-        evidence,
-      };
-    });
-
-  const whaleIndicators = [
-    totalValue >= 1_000_000 ? "Portfolio value exceeds common Solana whale monitoring thresholds" : null,
-    totalTxVolume >= 500_000 ? "Recent transaction notional indicates institutional-sized activity" : null,
-    highRiskTxCount > 0 ? `${highRiskTxCount} tracked transactions crossed elevated notional or failed-execution thresholds` : null,
-    largestPosition >= 40 ? "Portfolio is materially concentrated in a single asset" : null,
+  const suspiciousTokens: SuspiciousToken[] = [];
+  const highValueIndicators = [
+    totalValue >= 1_000_000 ? `Visible GoldRush balance value is $${Math.round(totalValue).toLocaleString()}.` : null,
+    totalTxVolume >= 500_000 ? `Tracked GoldRush transaction notional totals $${Math.round(totalTxVolume).toLocaleString()}.` : null,
+    highRiskTxCount > 0 ? `${highRiskTxCount} tracked transaction${highRiskTxCount === 1 ? "" : "s"} crossed elevated notional or failed-execution thresholds.` : null,
+    largestPosition >= 40 ? `${balances[0]?.symbol ?? "Largest visible asset"} is ${largestPosition}% of visible GoldRush balance value.` : null,
   ].filter(Boolean) as string[];
 
   return {
@@ -390,7 +376,7 @@ function buildRiskSignals(balances: WalletBalance[], transactions: WalletTransac
     transferBehaviorScore: Math.min(100, highRiskTxCount * 22 + percentileScore(totalTxVolume, 2_500_000) * 0.35),
     volatilityExposureScore: Math.min(100, balances.filter((balance) => Math.abs(balance.change24h) > 15 || balance.risk === "high").length * 24),
     transactionFrequencyScore: Math.min(100, transactions.length * 6),
-    whaleIndicators,
+    highValueIndicators,
   };
 }
 
@@ -410,7 +396,7 @@ export async function getWalletTransactions(address: string): Promise<{ data: Wa
     `${CHAIN}/address/${encodeURIComponent(address)}/transactions_v3/page/0/`,
   );
 
-  const transactions = result.data ? normalizeTransactions(result.data.items) : [];
+  const transactions = result.data ? normalizeTransactions(result.data.items, address) : [];
 
   return {
     data: transactions,
@@ -461,114 +447,7 @@ async function getGoldRushWalletSnapshot(address: string) {
   };
 }
 
-function extractLatestBlockHeight(data: { items?: GoldRushBlockItem[] } | GoldRushBlockItem | null) {
-  const item = Array.isArray((data as { items?: GoldRushBlockItem[] } | null)?.items)
-    ? (data as { items?: GoldRushBlockItem[] }).items?.[0]
-    : (data as GoldRushBlockItem | null);
-  const height = Number(item?.height ?? item?.block_height);
-  return Number.isFinite(height) && height > 0 ? Math.floor(height) : null;
-}
-
-function activityCandidatesFromTransactions(items: GoldRushTransactionItem[] = []) {
-  const grouped = new Map<string, WalletTransaction[]>();
-
-  for (const item of items) {
-    const from = item.from_address?.trim();
-    const to = item.to_address?.trim();
-    const timestamp = item.block_signed_at;
-    if (!timestamp) continue;
-    const baseAmount = Number(item.value_quote ?? item.gas_quote ?? 0);
-    const amountUsd = Number.isFinite(baseAmount) ? Math.max(baseAmount, 0) : 0;
-    const type = inferTransactionType(item);
-    const token = inferTransactionToken(item);
-
-    for (const [address, counterparty] of [
-      [from, to],
-      [to, from],
-    ] as Array<[string | undefined, string | undefined]>) {
-      if (!address) continue;
-      const transactions = grouped.get(address) ?? [];
-      transactions.push({
-        id: item.tx_hash ?? `discovery-${address}-${transactions.length}`,
-        type,
-        token,
-        amountUsd,
-        counterparty: counterparty ?? "unknown",
-        timestamp,
-        risk: transactionRisk(amountUsd, item.successful),
-      });
-      grouped.set(address, transactions);
-    }
-  }
-
-  return Array.from(grouped.entries()).map(
-    ([address, transactions]): RecentActivityCandidate => ({
-      address,
-      transactions,
-    }),
-  );
-}
-
-async function getRecentGoldRushActivityCandidates(): Promise<{ candidates: RecentActivityCandidate[]; reason?: string }> {
-  const configuredHeight = Number(process.env.SENTINEL_DISCOVERY_BLOCK_HEIGHT);
-  let latestHeight = Number.isFinite(configuredHeight) && configuredHeight > 0 ? Math.floor(configuredHeight) : null;
-
-  if (!latestHeight) {
-    const latestBlock = await goldrushFetch<{ items?: GoldRushBlockItem[] } | GoldRushBlockItem>(`${CHAIN}/block_v2/latest/`);
-    latestHeight = extractLatestBlockHeight(latestBlock.data);
-    if (!latestHeight) return { candidates: [], reason: latestBlock.reason ?? "goldrush_latest_block_unavailable" };
-  }
-
-  const blockHeights = [latestHeight, latestHeight - 1, latestHeight - 2].filter((height) => height > 0);
-  const blockResults = await Promise.all(
-    blockHeights.map((height) => goldrushFetch<{ items?: GoldRushTransactionItem[] }>(`${CHAIN}/block/${height}/transactions_v3/`)),
-  );
-
-  const items = blockResults.flatMap((result) => result.data?.items ?? []);
-  if (!items.length) {
-    return {
-      candidates: [],
-      reason: blockResults.find((result) => result.reason)?.reason ?? "goldrush_block_transactions_unavailable",
-    };
-  }
-
-  return { candidates: activityCandidatesFromTransactions(items) };
-}
-
-function emergenceSeverity(score: number): RiskLevel {
-  if (score >= 86) return "critical";
-  if (score >= 70) return "high";
-  if (score >= 52) return "moderate";
-  return "low";
-}
-
-function buildEmergenceAlert(snapshot: NonNullable<Awaited<ReturnType<typeof getGoldRushWalletSnapshot>>>): WhaleAlert | null {
-  const emergence = detectWhaleEmergence(snapshot);
-  if (emergence.emergenceScore < 34) return null;
-
-  const latestTimestamp = snapshot.transactions[0]?.timestamp;
-  if (!latestTimestamp) return null;
-  const topSignal = [...emergence.signals].sort((a, b) => b.weight - a.weight)[0];
-  const totalValue = snapshot.balances.reduce((sum, balance) => sum + balance.valueUsd, 0);
-
-  return {
-    id: `emergence-${snapshot.address}-${latestTimestamp}`,
-    kind: emergence.stage === "waking up" ? "dormant_to_active" : "whale_emergence",
-    wallet: snapshot.address,
-    token: snapshot.balances[0]?.symbol ?? snapshot.transactions[0]?.token ?? "SOL",
-    amountUsd: totalValue,
-    venue: "GoldRush intelligence",
-    timestamp: latestTimestamp,
-    severity: emergenceSeverity(emergence.emergenceScore),
-    title: emergence.stage === "waking up" ? "Wallet Goes From Dormant to Active" : "Whale Emergence Detected",
-    summary: `${emergence.stage} with ${emergence.emergenceScore}/100 emergence score.`,
-    reason: topSignal ? `${topSignal.label}: ${topSignal.value}. ${emergence.whyItMatters}` : emergence.whyItMatters,
-    sourceLabel: "GoldRush wallet activity",
-    group: "Whale emergence",
-  };
-}
-
-function buildTransactionAlert(address: string, transaction: WalletTransaction, walletTransactions: WalletTransaction[]): WhaleAlert {
+function buildTransactionAlert(address: string, transaction: WalletTransaction, walletTransactions: WalletTransaction[]): SentinelAlert {
   const kind = transactionAlertKind(transaction, walletTransactions);
 
   return {
@@ -584,35 +463,17 @@ function buildTransactionAlert(address: string, transaction: WalletTransaction, 
     summary: `${transaction.token} ${transaction.type} for ${transaction.amountUsd >= 1 ? `$${Math.round(transaction.amountUsd).toLocaleString()}` : "unpriced notional"}.`,
     reason:
       transaction.risk === "critical" || transaction.risk === "high"
-        ? "GoldRush transaction classification crossed the high-risk monitoring threshold."
-        : "Recent GoldRush activity matched the watchlist intelligence rules.",
+        ? `${transaction.type} transaction met ${transaction.risk} risk threshold from GoldRush amount and execution status.`
+        : `${transaction.type} transaction is present in the GoldRush watchlist response.`,
     sourceLabel: "GoldRush transactions",
     group: kind === "dex_activity_spike" || kind === "dex_activity" ? "DEX activity" : "Wallet activity",
   };
 }
 
 export async function getLiveAlertFeed(): Promise<AlertFeed> {
-  let addresses = watchlistAddresses().slice(0, 6);
-  let autoWatchlist: AutoWatchlistEntry[] = [];
-  let autoDetections: Awaited<ReturnType<typeof detectAutoWhales>>["detections"] = [];
-
+  const addresses = watchlistAddresses().slice(0, 6);
   if (!addresses.length) {
-    const detected = await detectAutoWhales({
-      loadRecentActivity: getRecentGoldRushActivityCandidates,
-      loadSnapshot: getGoldRushWalletSnapshot,
-    });
-    autoDetections = detected.detections;
-    addresses = detected.detections.map((detection) => detection.address);
-
-    if (!addresses.length) {
-      const auto = await buildAutoWatchlist(getGoldRushWalletSnapshot);
-      autoWatchlist = auto.wallets;
-      addresses = auto.wallets.map((wallet) => wallet.address);
-
-      if (!addresses.length) {
-        return { alerts: [], source: detected.source === "goldrush" ? detected.source : auto.source, reason: detected.reason ?? auto.reason };
-      }
-    }
+    return { alerts: [], source: "empty", reason: "no_watchlist_configured" };
   }
 
   const snapshots = (await Promise.all(addresses.map((address) => getGoldRushWalletSnapshot(address)))).filter(Boolean) as Array<
@@ -622,63 +483,19 @@ export async function getLiveAlertFeed(): Promise<AlertFeed> {
   if (!snapshots.length) {
     return {
       alerts: [],
-      source: "fallback",
+      source: "empty",
       reason: "goldrush_unavailable",
     };
   }
 
-  const snapshotByAddress = new Map(snapshots.map((snapshot) => [snapshot.address, snapshot]));
-
-  const newWatchlistAlerts = autoWatchlist.slice(0, 3).flatMap((wallet): WhaleAlert[] => {
-    const snapshot = snapshotByAddress.get(wallet.address);
-    const timestamp = snapshot?.transactions[0]?.timestamp;
-    if (!timestamp) return [];
-    return [{
-      id: `watchlist-${wallet.address}`,
-      kind: "new_watchlist_wallet",
-      wallet: wallet.address,
-      token: snapshot?.balances[0]?.symbol ?? snapshot?.transactions[0]?.token ?? "UNKNOWN",
-      amountUsd: snapshot?.balances.reduce((sum, balance) => sum + balance.valueUsd, 0) ?? 0,
-      venue: "Auto watchlist",
-      timestamp,
-      severity: wallet.score >= 70 ? "high" : wallet.score >= 45 ? "moderate" : "low",
-      title: "New Wallet Enters Watchlist",
-      summary: `Auto-ranked wallet scored ${wallet.score}/100 from GoldRush evidence.`,
-      reason: wallet.reason,
-      sourceLabel: "GoldRush auto watchlist",
-      group: "Watchlist builder",
-    }];
-  });
-
-  const detectionAlerts = autoDetections.slice(0, 4).flatMap((detection): WhaleAlert[] => {
-    const snapshot = snapshotByAddress.get(detection.address);
-    const timestamp = snapshot?.transactions[0]?.timestamp;
-    if (!timestamp) return [];
-    return [{
-      id: `detection-${detection.address}`,
-      kind: detection.signals.some((signal) => signal.includes("DEX")) ? "dex_activity_spike" : detection.signals.length >= 3 ? "activity_cluster_burst" : "new_watchlist_wallet",
-      wallet: detection.address,
-      token: snapshot?.balances[0]?.symbol ?? snapshot?.transactions[0]?.token ?? "UNKNOWN",
-      amountUsd: snapshot?.balances.reduce((sum, balance) => sum + balance.valueUsd, 0) ?? 0,
-      venue: "Auto discovery",
-      timestamp,
-      severity: detection.score >= 82 ? "critical" : detection.score >= 64 ? "high" : detection.score >= 48 ? "moderate" : "low",
-      title: detection.signals.length >= 3 ? "Activity Cluster Burst" : "New Wallet of Interest",
-      summary: `${detection.stage} wallet scored ${detection.score}/100 from recent GoldRush activity.`,
-      reason: detection.reason,
-      sourceLabel: "GoldRush auto discovery",
-      group: "Auto discovery",
-    }];
-  });
-
   const alerts = sortBreakingAlerts([
-    ...detectionAlerts,
-    ...newWatchlistAlerts,
-    ...snapshots.flatMap((snapshot) => [
-      buildEmergenceAlert(snapshot),
-      ...snapshot.transactions.slice(0, 5).map((transaction) => buildTransactionAlert(snapshot.address, transaction, snapshot.transactions)),
-    ]),
-  ].filter(Boolean) as WhaleAlert[])
+    ...snapshots.flatMap((snapshot) =>
+      snapshot.transactions
+        .filter((transaction) => transaction.risk === "moderate" || transaction.risk === "high" || transaction.risk === "critical" || transaction.type === "swap")
+        .slice(0, 5)
+        .map((transaction) => buildTransactionAlert(snapshot.address, transaction, snapshot.transactions)),
+    ),
+  ].filter(Boolean) as SentinelAlert[])
     .slice(0, 12);
 
   return {

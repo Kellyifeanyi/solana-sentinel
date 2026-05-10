@@ -1,35 +1,6 @@
 import type { SignalAction } from "@/types/signal-action";
 import type { WalletReport } from "@/types/sentinel";
-
-const TOKENS = {
-  SOL: {
-    symbol: "SOL",
-    mint: "So11111111111111111111111111111111111111112",
-    decimals: 9,
-  },
-  USDC: {
-    symbol: "USDC",
-    mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    decimals: 6,
-  },
-  JUP: {
-    symbol: "JUP",
-    mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
-    decimals: 6,
-  },
-} as const;
-
-function actionPair(input: keyof typeof TOKENS, output: keyof typeof TOKENS, amount: number) {
-  return {
-    inputSymbol: TOKENS[input].symbol,
-    inputMint: TOKENS[input].mint,
-    inputDecimals: TOKENS[input].decimals,
-    outputSymbol: TOKENS[output].symbol,
-    outputMint: TOKENS[output].mint,
-    outputDecimals: TOKENS[output].decimals,
-    amount,
-  };
-}
+import { actionPair } from "@/lib/trading/tokens";
 
 export function deriveActionOpportunities(report: WalletReport): SignalAction[] {
   if (report.source !== "goldrush") return [];
@@ -47,7 +18,6 @@ export function deriveActionOpportunities(report: WalletReport): SignalAction[] 
       id: "stablecoin-rotation-preview",
       title: "Stablecoin Rotation Preview",
       reason: `Wallet holds ${stablecoinBalance.symbol} exposure and executed ${swaps.length} tracked DEX swaps.`,
-      confidence: swaps.length >= 5 ? "high" : "moderate",
       suggestedAction: "Preview a small USDC to SOL route before taking directional exposure.",
       tokenPair: actionPair("USDC", "SOL", 25),
       supportingSignals: [
@@ -62,7 +32,6 @@ export function deriveActionOpportunities(report: WalletReport): SignalAction[] 
       id: "sol-exposure-rebalance",
       title: "SOL Exposure Route Check",
       reason: `${largeTransfers.length} large transfers appeared in the tracked transaction window while SOL is present in balances.`,
-      confidence: largeTransfers.length >= 4 ? "high" : "moderate",
       suggestedAction: "Preview a SOL to USDC route to quantify exit liquidity before mirroring exposure.",
       tokenPair: actionPair("SOL", "USDC", 0.05),
       supportingSignals: [
@@ -77,7 +46,6 @@ export function deriveActionOpportunities(report: WalletReport): SignalAction[] 
       id: "jup-dex-liquidity-check",
       title: "JUP Liquidity Route Check",
       reason: `JUP is ${jupBalance.concentration}% of visible balances and the wallet has tracked DEX activity.`,
-      confidence: jupBalance.concentration >= 30 && swaps.length >= 3 ? "high" : "moderate",
       suggestedAction: "Preview a JUP to USDC route to measure current executable liquidity.",
       tokenPair: actionPair("JUP", "USDC", 5),
       supportingSignals: [

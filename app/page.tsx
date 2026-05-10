@@ -6,9 +6,9 @@ import { MobileNav } from "@/components/mobile-nav";
 import { ConnectWalletButton } from "@/components/wallet/connect-wallet-button";
 
 const features = [
-  { title: "Track whales in realtime", description: "Surface large transfers, DEX rotations, and bridge events as they happen.", icon: Activity },
-  { title: "Analyze wallet risk", description: "Score wallets from token quality, concentration, velocity, and volatility signals.", icon: ShieldCheck },
-  { title: "Monitor suspicious activity", description: "Flag fresh mints, concentrated holder sets, and abnormal transfer patterns.", icon: Siren },
+  { title: "Track high-value wallets", description: "Surface large transfers, DEX rotations, and bridge events from GoldRush data.", icon: Activity },
+  { title: "Analyze wallet risk", description: "Score wallets from visible balances, concentration, transaction value, and activity frequency.", icon: ShieldCheck },
+  { title: "Monitor transaction evidence", description: "Review transfers, swaps, mints, burns, and bridge movements returned by GoldRush.", icon: Siren },
 ];
 
 export default function Home() {
@@ -83,7 +83,7 @@ export default function Home() {
               <h2 className="mt-3 text-2xl font-semibold text-white">Risk, flow, and exposure fused into one operator view.</h2>
             </div>
             <div className="grid gap-2 text-sm text-slate-300 sm:grid-cols-3 md:w-[460px]">
-              <span className="rounded-md border border-white/10 bg-slate-950/60 px-3 py-2">Whale flow</span>
+              <span className="rounded-md border border-white/10 bg-slate-950/60 px-3 py-2">Large flow</span>
               <span className="rounded-md border border-white/10 bg-slate-950/60 px-3 py-2">Token risk</span>
               <span className="rounded-md border border-white/10 bg-slate-950/60 px-3 py-2">x402 insight</span>
             </div>

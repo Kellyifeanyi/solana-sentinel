@@ -1,10 +1,7 @@
-import type { EvidenceConfidence } from "@/types/sentinel";
-
 export type SignalAction = {
   id: string;
   title: string;
   reason: string;
-  confidence: EvidenceConfidence;
   suggestedAction: string;
   tokenPair: {
     inputSymbol: string;

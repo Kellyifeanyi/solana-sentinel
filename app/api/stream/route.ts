@@ -8,7 +8,6 @@ export async function GET() {
     async start(controller) {
       for (const alert of alerts) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(alert)}\n\n`));
-        await new Promise((resolve) => setTimeout(resolve, 350));
       }
       controller.close();
     },

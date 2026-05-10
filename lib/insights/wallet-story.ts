@@ -15,7 +15,7 @@ export type WalletStory = {
   wallet: string;
   source: WalletReport["source"];
   generatedAt: string;
-  summary: string;
+  summary: string | null;
   insights: WalletStoryInsight[];
 };
 
@@ -44,14 +44,25 @@ function transactionWindow(transactions: WalletTransaction[], days: number) {
 }
 
 export function buildWalletStory(report: WalletReport): WalletStory {
+  if (report.source !== "goldrush") {
+    return {
+      wallet: report.address,
+      source: report.source,
+      generatedAt: new Date().toISOString(),
+      summary: null,
+      insights: [],
+    };
+  }
+
   const transactions = newestFirst(report.transactions);
   const recentTransactions = transactionWindow(transactions, 7);
   const dexTransactions = recentTransactions.filter((transaction) => transaction.type === "swap");
-  const whaleTransactions = transactions.filter((transaction) => transaction.amountUsd >= 250_000);
+  const highValueTransactions = transactions.filter((transaction) => transaction.amountUsd >= 250_000);
   const highRiskTransactions = transactions.filter((transaction) => transaction.risk === "high" || transaction.risk === "critical");
   const firstSeenDays = transactions.at(-1) ? daysSince(transactions.at(-1)!.timestamp) : null;
   const totalRecentVolume = recentTransactions.reduce((sum, transaction) => sum + transaction.amountUsd, 0);
   const largestBalance = report.balances[0];
+  const visibleTokenCount = report.balances.length;
 
   const insights: WalletStoryInsight[] = [];
 
@@ -71,18 +82,18 @@ export function buildWalletStory(report: WalletReport): WalletStory {
     });
   }
 
-  if (whaleTransactions.length > 0) {
-    const largestTransfer = whaleTransactions.reduce((largest, transaction) =>
+  if (highValueTransactions.length > 0) {
+    const largestTransfer = highValueTransactions.reduce((largest, transaction) =>
       transaction.amountUsd > largest.amountUsd ? transaction : largest,
     );
 
     insights.push({
-      id: "whale-transfer-pattern",
-      title: "Whale Transfer Pattern",
-      narrative: `${whaleTransactions.length} tracked transactions are at or above $250k notional, led by ${largestTransfer.token}.`,
+      id: "high-value-transfer-pattern",
+      title: "High-Value Transfer Pattern",
+      narrative: `${highValueTransactions.length} tracked transactions are at or above $250k notional, led by ${largestTransfer.token}.`,
       severity: largestTransfer.amountUsd >= 1_000_000 ? "critical" : "high",
       evidence: [
-        { label: "Whale-sized transfers", value: whaleTransactions.length },
+        { label: "High-value transfers", value: highValueTransactions.length },
         { label: "Largest transfer USD", value: Math.round(largestTransfer.amountUsd) },
         { label: "Token", value: largestTransfer.token },
       ],
@@ -102,16 +113,17 @@ export function buildWalletStory(report: WalletReport): WalletStory {
     });
   }
 
-  if (largestBalance) {
+  if (largestBalance && (largestBalance.concentration >= 40 || visibleTokenCount >= 2)) {
     insights.push({
       id: "portfolio-concentration",
       title: "Portfolio Concentration",
       narrative:
         largestBalance.concentration >= 40
           ? `${largestBalance.symbol} accounts for ${largestBalance.concentration}% of visible GoldRush balance value.`
-          : `${largestBalance.symbol} is the largest visible position at ${largestBalance.concentration}% of tracked balance value.`,
+          : `GoldRush returned ${visibleTokenCount} visible token positions; the largest is ${largestBalance.symbol} at ${largestBalance.concentration}% of tracked balance value.`,
       severity: largestBalance.concentration >= 45 ? "high" : severityForScore(report.signals.concentrationScore),
       evidence: [
+        { label: "Visible tokens", value: visibleTokenCount },
         { label: "Largest asset", value: largestBalance.symbol },
         { label: "Concentration", value: `${largestBalance.concentration}%` },
       ],
@@ -135,10 +147,7 @@ export function buildWalletStory(report: WalletReport): WalletStory {
     wallet: report.address,
     source: report.source,
     generatedAt: new Date().toISOString(),
-    summary:
-      insights.length > 0
-        ? "Structured observations below are derived from normalized GoldRush balances and transactions."
-        : "Insufficient chain evidence in the current GoldRush response to generate wallet behavior insights.",
+    summary: null,
     insights: insights.slice(0, 5),
   };
 }

@@ -1,14 +1,8 @@
 export type RiskLevel = "low" | "moderate" | "high" | "critical";
-export type EvidenceConfidence = "low" | "moderate" | "high";
 
 export type AlertKind =
-  | "whale_emergence"
   | "accumulation_burst"
   | "dex_activity_spike"
-  | "risk_profile_changed"
-  | "new_watchlist_wallet"
-  | "activity_cluster_burst"
-  | "dormant_to_active"
   | "suspicious_transfer_surge"
   | "large_transfer"
   | "dex_activity"
@@ -30,6 +24,9 @@ export type WalletTransaction = {
   token: string;
   amountUsd: number;
   counterparty: string;
+  fromAddress?: string;
+  toAddress?: string;
+  direction?: "inbound" | "outbound" | "self" | "unknown";
   timestamp: string;
   risk: RiskLevel;
 };
@@ -39,11 +36,10 @@ export type SuspiciousToken = {
   reason: string;
   severity: RiskLevel;
   exposureUsd: number;
-  confidence: EvidenceConfidence;
   evidence: string[];
 };
 
-export type WhaleAlert = {
+export type SentinelAlert = {
   id: string;
   kind: AlertKind;
   wallet: string;
@@ -59,58 +55,13 @@ export type WhaleAlert = {
   group?: string;
 };
 
-export type AutoWatchlistEntry = {
-  address: string;
-  score: number;
-  reason: string;
-  labels: string[];
-};
-
-export type AutoWatchlistResult = {
-  wallets: AutoWatchlistEntry[];
-  source: "goldrush" | "empty";
-  reason?: string;
-};
-
-export type AutoDetectionStage = "dormant" | "waking up" | "emerging" | "active" | "whale-like";
-
-export type AutoWhaleDetection = {
-  address: string;
-  score: number;
-  stage: AutoDetectionStage;
-  reason: string;
-  signals: string[];
-};
-
-export type ActivityScanResult = {
-  detections: AutoWhaleDetection[];
-  source: "goldrush" | "empty";
-  reason?: string;
-};
-
-export type WhaleEmergenceStage = "dormant" | "waking up" | "emerging" | "active whale candidate" | "whale-like";
-
-export type WhaleEmergenceSignal = {
-  label: string;
-  value: string;
-  weight: number;
-};
-
-export type WhaleEmergence = {
-  address: string;
-  emergenceScore: number;
-  stage: WhaleEmergenceStage;
-  signals: WhaleEmergenceSignal[];
-  whyItMatters: string;
-};
-
 export type RiskSignals = {
   suspiciousTokens: SuspiciousToken[];
   concentrationScore: number;
   transferBehaviorScore: number;
   volatilityExposureScore: number;
   transactionFrequencyScore: number;
-  whaleIndicators: string[];
+  highValueIndicators: string[];
 };
 
 export type WalletReport = {
@@ -125,7 +76,7 @@ export type WalletReport = {
 };
 
 export type AlertFeed = {
-  alerts: WhaleAlert[];
+  alerts: SentinelAlert[];
   source: "goldrush" | "fallback" | "empty";
   reason?: string;
 };

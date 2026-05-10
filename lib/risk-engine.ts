@@ -50,9 +50,5 @@ export function buildRecommendations(score: number, signals: RiskSignals) {
     recommendations.push("Visible balances include high 24h price movement; size any action against current liquidity and route preview.");
   }
 
-  if (score < 38 && recommendations.length === 0) {
-    recommendations.push("Insufficient elevated evidence in the current GoldRush window; continue monitoring wallet activity.");
-  }
-
   return recommendations;
 }

@@ -18,7 +18,7 @@ export function PortfolioChart({ balances }: { balances: WalletBalance[] }) {
   if (!data.length) {
     return (
       <div className="grid h-64 min-h-64 min-w-0 place-items-center rounded-lg border border-dashed border-white/10 bg-white/[.03] text-sm text-slate-500">
-        Awaiting GoldRush balance data
+        No balances available.
       </div>
     );
   }

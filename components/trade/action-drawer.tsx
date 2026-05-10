@@ -10,10 +10,12 @@ import type { SignalAction, SwapQuotePreview } from "@/types/signal-action";
 
 export function ActionDrawer({
   action,
+  quote: initialQuote,
   open,
   onClose,
 }: {
   action: SignalAction | null;
+  quote: SwapQuotePreview | null;
   open: boolean;
   onClose: () => void;
 }) {
@@ -25,19 +27,20 @@ export function ActionDrawer({
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open || !action) return;
+    if (!open || !action || !connected) return;
     let cancelled = false;
     const currentAction = action;
 
     async function loadQuote() {
-      setQuote(null);
+      setQuote(initialQuote);
       setStatus(null);
+      if (initialQuote) return;
       setLoadingQuote(true);
       try {
         const nextQuote = await getJupiterQuote(currentAction);
         if (!cancelled) setQuote(nextQuote);
       } catch {
-        if (!cancelled) setStatus("Jupiter route preview is unavailable right now.");
+        if (!cancelled) setStatus(null);
       } finally {
         if (!cancelled) setLoadingQuote(false);
       }
@@ -47,7 +50,7 @@ export function ActionDrawer({
     return () => {
       cancelled = true;
     };
-  }, [action, open]);
+  }, [action, connected, initialQuote, open]);
 
   async function execute() {
     if (!action || !quote || !publicKey || !signTransaction) return;
@@ -76,7 +79,7 @@ export function ActionDrawer({
       <aside className="absolute inset-x-0 bottom-0 max-h-[92vh] overflow-y-auto rounded-t-lg border border-white/10 bg-slate-950 p-5 shadow-2xl shadow-black/50 sm:inset-y-0 sm:right-0 sm:left-auto sm:w-[440px] sm:rounded-none sm:border-y-0 sm:border-r-0 sm:p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200">Action Opportunity</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200">Jupiter Execution</p>
             <h2 className="mt-2 text-xl font-semibold text-white">{action.title}</h2>
           </div>
           <button type="button" onClick={onClose} className="grid size-9 place-items-center rounded-md border border-white/10 text-slate-300 hover:bg-white/[.07] hover:text-white">
@@ -88,7 +91,6 @@ export function ActionDrawer({
 
         <div className="mt-5 grid gap-3">
           <Info label="Suggested action" value={action.suggestedAction} />
-          <Info label="Evidence confidence" value={action.confidence.toUpperCase()} />
           <Info label="Slippage" value="0.50%" />
         </div>
 
@@ -107,7 +109,7 @@ export function ActionDrawer({
                 <div className="flex justify-between gap-3"><span className="text-slate-500">Route</span><span className="text-right text-white">{quote.routeLabel}</span></div>
               </div>
             )}
-            {!loadingQuote && !quote && <p className="text-sm text-slate-400">Route preview unavailable. No swap can execute without a Jupiter quote.</p>}
+            {!loadingQuote && !quote && <p className="text-sm text-slate-400">No route available.</p>}
           </div>
         </div>
 
@@ -124,7 +126,7 @@ export function ActionDrawer({
           {!connected ? (
             <>
               <ConnectWalletButton />
-              <p className="text-sm text-slate-400">Connect wallet to execute.</p>
+              <p className="text-sm text-slate-400">Connect wallet to execute</p>
             </>
           ) : (
             <Button onClick={execute} disabled={!quote || executing} className="w-full">

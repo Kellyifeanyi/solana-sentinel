@@ -22,29 +22,23 @@ export default async function AlertsPage() {
             </Link>
             <div>
               <p className="text-xs uppercase tracking-[0.24em] text-cyan-200">Sentinel stream</p>
-              <h1 className="mt-1 text-2xl font-semibold text-white sm:text-3xl">Live Whale Alerts</h1>
+              <h1 className="mt-1 text-2xl font-semibold text-white sm:text-3xl">Live Alerts</h1>
             </div>
           </div>
           <div className="hidden items-center gap-3 sm:flex">
             <ConnectWalletButton compact />
             <div className="flex items-center gap-2 rounded-md border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-sm text-emerald-100 shadow-[0_0_36px_rgba(16,185,129,.12)]">
               <RadioTower className="size-4" />
-              Streaming
+              GoldRush
             </div>
           </div>
           <MobileNav />
         </nav>
 
-        {feed.source !== "goldrush" && (
-          <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/10 p-4 text-sm leading-6 text-amber-50">
-            Breaking alerts are waiting on real GoldRush data{feed.reason ? ` (${feed.reason})` : ""}. The dashboard is live, but no production alerts will be fabricated.
-          </div>
-        )}
-
         <section className="animate-rise-delay mt-8 grid gap-4 md:grid-cols-3">
           <AlertStat label="Tracked Notional" value={formatUsd(notional)} detail="Observed transfer value" icon={TrendingUp} />
-          <AlertStat label="Critical Signals" value={String(alerts.filter((alert) => alert.severity === "critical").length)} detail="Immediate review queue" icon={ShieldAlert} tone="rose" />
-          <AlertStat label="Venues" value={String(new Set(alerts.map((alert) => alert.venue)).size)} detail="DEX, bridge, native flows" icon={RadioTower} tone="emerald" />
+          <AlertStat label="Critical Signals" value={String(alerts.filter((alert) => alert.severity === "critical").length)} detail="GoldRush alert count" icon={ShieldAlert} tone="rose" />
+          <AlertStat label="Venues" value={String(new Set(alerts.map((alert) => alert.venue)).size)} detail="Observed venues" icon={RadioTower} tone="emerald" />
         </section>
 
         <section className="mt-4 pb-10">
